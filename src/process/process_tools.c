@@ -3,7 +3,7 @@
 
 #include <windows.h>
 #include <tlhelp32.h>
-#include <psapi.h> // 必须包含此头文件才能使用 GetModuleFileNameEx
+#include <psapi.h> // Must include this header to use GetModuleFileNameEx
 
 // Get process PID by name, returns 0 if failed
 FFI_PLUGIN_EXPORT int get_pid_by_name(const char *process_name)
@@ -86,13 +86,13 @@ FFI_PLUGIN_EXPORT const char *get_pid_by_path(int pid)
   static char path_buffer[MAX_PATH];
   path_buffer[0] = '\0'; // Initialize to empty string
 
-  // 防止无效PID
+  // Prevent invalid PID
   if (pid <= 4)
-  { // 系统进程PID通常为0-4
+  { // System process PIDs are usually 0-4
     return path_buffer;
   }
 
-  // 使用标准方法尝试获取路径 - 更快且不需要额外库
+  // Try to get the path using the standard method - faster and does not require extra libraries
   HANDLE hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
   if (hProcess != NULL)
   {
@@ -100,16 +100,16 @@ FFI_PLUGIN_EXPORT const char *get_pid_by_path(int pid)
     if (QueryFullProcessImageNameA(hProcess, 0, path_buffer, &pathSize) != 0)
     {
       CloseHandle(hProcess);
-      return path_buffer; // 成功获取路径，立即返回
+      return path_buffer; // Successfully got the path, return immediately
     }
     CloseHandle(hProcess);
   }
 
-  // 如果上面的方法失败，再尝试使用psapi
+  // If the above method fails, try using psapi
   HMODULE psapiDll = LoadLibraryA("psapi.dll");
   if (psapiDll == NULL)
   {
-    return path_buffer; // 无法加载必要的库
+    return path_buffer; // Failed to load required library
   }
 
   typedef DWORD(WINAPI * GetModuleFileNameExFunc)(HANDLE, HMODULE, LPSTR, DWORD);
@@ -119,18 +119,18 @@ FFI_PLUGIN_EXPORT const char *get_pid_by_path(int pid)
   if (pGetModuleFileNameEx == NULL)
   {
     FreeLibrary(psapiDll);
-    return path_buffer; // 无法获取函数地址
+    return path_buffer; // Failed to get function address
   }
 
-  // 使用更安全的标志打开进程
+  // Open the process with safer flags
   hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
   if (hProcess != NULL)
   {
-    // 设置超时
+    // Set timeout
     DWORD result = (*pGetModuleFileNameEx)(hProcess, NULL, path_buffer, MAX_PATH);
     CloseHandle(hProcess);
 
-    // 如果获取结果是空的，则清空缓冲区
+    // If the result is empty, clear the buffer
     if (result == 0)
     {
       path_buffer[0] = '\0';
