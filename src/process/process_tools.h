@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <winsock2.h>
 #include <windows.h>
 
 #define FFI_PLUGIN_EXPORT __declspec(dllexport)

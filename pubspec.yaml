@@ -1,23 +1,22 @@
 name: flutter_tools_list
-description: "A new Flutter project."
+description: "A Flutter plugin that provides native process and port management tools for Windows, including functions to query process IDs, check port usage, and retrieve process information."
 version: 0.0.1
-homepage:
 
 environment:
-  sdk: ^3.7.2
+  sdk: ^3.0.0
   flutter: '>=3.3.0'
 
 dependencies:
   flutter:
     sdk: flutter
-  plugin_platform_interface: ^2.0.2
+  plugin_platform_interface: ^2.1.8
+  ffi: ^2.1.4
 
 dev_dependencies:
-  ffi: ^2.1.4
-  ffigen: ^19.0.0
+  ffigen: ^20.1.1
   flutter_test:
     sdk: flutter
-  flutter_lints: ^5.0.0
+  flutter_lints: ^6.0.0
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

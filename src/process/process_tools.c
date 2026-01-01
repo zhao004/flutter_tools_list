@@ -1,98 +1,213 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include "process_tools.h"
 
-#include <windows.h>
 #include <tlhelp32.h>
-#include <psapi.h> // Must include this header to use GetModuleFileNameEx
+#include <psapi.h>
+#include <iphlpapi.h>
+
+#pragma comment(lib, "iphlpapi.lib")
+#pragma comment(lib, "ws2_32.lib")
 
 // Get process PID by name, returns 0 if failed
 FFI_PLUGIN_EXPORT int get_pid_by_name(const char *process_name)
 {
-  HANDLE hProcessSnap;
-  PROCESSENTRY32 pe32;
-  int pid = 0;
-  hProcessSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+  // Input validation
+  if (process_name == NULL || process_name[0] == '\0')
+  {
+    return 0;
+  }
+
+  HANDLE hProcessSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
   if (hProcessSnap == INVALID_HANDLE_VALUE)
   {
     return 0;
   }
+
+  PROCESSENTRY32 pe32;
   pe32.dwSize = sizeof(PROCESSENTRY32);
+
   if (!Process32First(hProcessSnap, &pe32))
   {
     CloseHandle(hProcessSnap);
     return 0;
   }
-  do
-  { // Convert wide character to multibyte character for comparison
-    char exeName[MAX_PATH];
-    WideCharToMultiByte(CP_UTF8, 0, pe32.szExeFile, -1, exeName, MAX_PATH, NULL, NULL);
 
-    if (strcmp(exeName, process_name) == 0)
+  // Allocate buffer outside loop for better performance
+  char exeName[MAX_PATH];
+  int pid = 0;
+
+  do
+  {
+    // Convert wide character to multibyte character for comparison
+    if (WideCharToMultiByte(CP_UTF8, 0, pe32.szExeFile, -1, exeName, MAX_PATH, NULL, NULL) > 0)
     {
-      pid = pe32.th32ProcessID;
-      break;
+      // Use case-insensitive comparison (more robust on Windows)
+      if (_stricmp(exeName, process_name) == 0)
+      {
+        pid = pe32.th32ProcessID;
+        break;
+      }
     }
   } while (Process32Next(hProcessSnap, &pe32));
+
   CloseHandle(hProcessSnap);
   return pid;
 }
 
-// Get process PID by port number, returns 0 if failed
-FFI_PLUGIN_EXPORT int get_pid_by_port(int port)
+// Helper function to check TCP table for port
+static int check_tcp_port(int port, DWORD *out_pid)
 {
-  // Get process information using netstat command on Windows
-  FILE *fp = _popen("netstat -ano", "r");
-  if (!fp)
-    return 0;
-  char line[512];
-  int pid = 0;
-  char local_addr[64];
-  int local_port;
-  while (fgets(line, sizeof(line), fp))
+  DWORD dwSize = 0;
+  DWORD dwRetVal = 0;
+
+  // Get required buffer size
+  MIB_TCPTABLE_OWNER_PID *pTcpTable = NULL;
+  dwRetVal = GetExtendedTcpTable(NULL, &dwSize, FALSE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0);
+
+  if (dwRetVal != ERROR_INSUFFICIENT_BUFFER)
   {
-    if (strstr(line, "TCP") || strstr(line, "UDP"))
+    return 0;
+  }
+
+  pTcpTable = (MIB_TCPTABLE_OWNER_PID *)malloc(dwSize);
+  if (pTcpTable == NULL)
+  {
+    return 0;
+  }
+
+  // Get TCP table
+  dwRetVal = GetExtendedTcpTable(pTcpTable, &dwSize, FALSE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0);
+
+  if (dwRetVal != NO_ERROR)
+  {
+    free(pTcpTable);
+    return 0;
+  }
+
+  // Search for port
+  for (DWORD i = 0; i < pTcpTable->dwNumEntries; i++)
+  {
+    int local_port = ntohs((u_short)pTcpTable->table[i].dwLocalPort);
+    if (local_port == port)
     {
-      if (sscanf_s(line, "%*s %63[^:]:%d", local_addr, (unsigned)sizeof(local_addr), &local_port) == 2)
+      if (out_pid)
       {
-        if (local_port == port)
-        { // Extract PID more robustly
-          int tmp_pid = 0;
-          char *pid_str = strrchr(line, ' ');
-          if (pid_str)
-          {
-            while (*pid_str == ' ')
-              pid_str++; // Skip extra spaces
-            tmp_pid = atoi(pid_str);
-            pid = tmp_pid;
-            break;
-          }
-        }
+        *out_pid = pTcpTable->table[i].dwOwningPid;
       }
+      free(pTcpTable);
+      return 1;
     }
   }
-  _pclose(fp);
-  return pid;
+
+  free(pTcpTable);
+  return 0;
+}
+
+// Helper function to check UDP table for port
+static int check_udp_port(int port, DWORD *out_pid)
+{
+  DWORD dwSize = 0;
+  DWORD dwRetVal = 0;
+
+  // Get required buffer size
+  MIB_UDPTABLE_OWNER_PID *pUdpTable = NULL;
+  dwRetVal = GetExtendedUdpTable(NULL, &dwSize, FALSE, AF_INET, UDP_TABLE_OWNER_PID, 0);
+
+  if (dwRetVal != ERROR_INSUFFICIENT_BUFFER)
+  {
+    return 0;
+  }
+
+  pUdpTable = (MIB_UDPTABLE_OWNER_PID *)malloc(dwSize);
+  if (pUdpTable == NULL)
+  {
+    return 0;
+  }
+
+  // Get UDP table
+  dwRetVal = GetExtendedUdpTable(pUdpTable, &dwSize, FALSE, AF_INET, UDP_TABLE_OWNER_PID, 0);
+
+  if (dwRetVal != NO_ERROR)
+  {
+    free(pUdpTable);
+    return 0;
+  }
+
+  // Search for port
+  for (DWORD i = 0; i < pUdpTable->dwNumEntries; i++)
+  {
+    int local_port = ntohs((u_short)pUdpTable->table[i].dwLocalPort);
+    if (local_port == port)
+    {
+      if (out_pid)
+      {
+        *out_pid = pUdpTable->table[i].dwOwningPid;
+      }
+      free(pUdpTable);
+      return 1;
+    }
+  }
+
+  free(pUdpTable);
+  return 0;
+}
+
+// Get process PID by port number, returns 0 if failed
+// Much faster than using netstat command - uses Windows API directly
+FFI_PLUGIN_EXPORT int get_pid_by_port(int port)
+{
+  // Input validation
+  if (port <= 0 || port > 65535)
+  {
+    return 0;
+  }
+
+  DWORD pid = 0;
+
+  // Check TCP ports first (more common)
+  if (check_tcp_port(port, &pid))
+  {
+    return (int)pid;
+  }
+
+  // Check UDP ports
+  if (check_udp_port(port, &pid))
+  {
+    return (int)pid;
+  }
+
+  return 0;
 }
 
 // Check if port is in use, returns 1 if in use, 0 if not
+// Optimized to avoid unnecessary PID retrieval
 FFI_PLUGIN_EXPORT int is_port_in_use(int port)
 {
-  return get_pid_by_port(port) != 0 ? 1 : 0;
+  // Input validation
+  if (port <= 0 || port > 65535)
+  {
+    return 0;
+  }
+
+  // Check TCP and UDP without retrieving PID (faster)
+  return check_tcp_port(port, NULL) || check_udp_port(port, NULL);
 }
 
 // Get process path by PID, returns path if successful, empty string if failed
+// Optimized to use QueryFullProcessImageNameA as primary method (Vista+)
+// Falls back to GetModuleFileNameEx for older systems
 FFI_PLUGIN_EXPORT const char *get_pid_by_path(int pid)
 {
   static char path_buffer[MAX_PATH];
   path_buffer[0] = '\0'; // Initialize to empty string
 
-  // Prevent invalid PID
-  if (pid <= 4)
-  { // System process PIDs are usually 0-4
+  // Input validation - prevent invalid PID
+  if (pid <= 0 || pid == 4) // PID 0 and 4 are system processes
+  {
     return path_buffer;
   }
 
-  // Try to get the path using the standard method - faster and does not require extra libraries
+  // Try QueryFullProcessImageNameA first (Vista+, faster, more reliable)
   HANDLE hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
   if (hProcess != NULL)
   {
@@ -100,43 +215,24 @@ FFI_PLUGIN_EXPORT const char *get_pid_by_path(int pid)
     if (QueryFullProcessImageNameA(hProcess, 0, path_buffer, &pathSize) != 0)
     {
       CloseHandle(hProcess);
-      return path_buffer; // Successfully got the path, return immediately
+      return path_buffer; // Success
     }
     CloseHandle(hProcess);
   }
 
-  // If the above method fails, try using psapi
-  HMODULE psapiDll = LoadLibraryA("psapi.dll");
-  if (psapiDll == NULL)
-  {
-    return path_buffer; // Failed to load required library
-  }
-
-  typedef DWORD(WINAPI * GetModuleFileNameExFunc)(HANDLE, HMODULE, LPSTR, DWORD);
-  GetModuleFileNameExFunc pGetModuleFileNameEx =
-      (GetModuleFileNameExFunc)GetProcAddress(psapiDll, "GetModuleFileNameExA");
-
-  if (pGetModuleFileNameEx == NULL)
-  {
-    FreeLibrary(psapiDll);
-    return path_buffer; // Failed to get function address
-  }
-
-  // Open the process with safer flags
+  // Fallback: Try with more permissions for GetModuleFileNameEx
+  // This is statically linked via psapi.h, no need for LoadLibrary
   hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
   if (hProcess != NULL)
   {
-    // Set timeout
-    DWORD result = (*pGetModuleFileNameEx)(hProcess, NULL, path_buffer, MAX_PATH);
+    DWORD result = GetModuleFileNameExA(hProcess, NULL, path_buffer, MAX_PATH);
     CloseHandle(hProcess);
 
-    // If the result is empty, clear the buffer
     if (result == 0)
     {
-      path_buffer[0] = '\0';
+      path_buffer[0] = '\0'; // Clear buffer on failure
     }
   }
 
-  FreeLibrary(psapiDll);
   return path_buffer;
 }

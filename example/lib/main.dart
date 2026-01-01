@@ -30,7 +30,7 @@ class _MyAppState extends State<MyApp> {
               children: [
                 MaterialButton(
                   onPressed: () async {
-                    print(await getPidByPath(24340));
+                    print(isPortInUse(5000));
                   },
                   child: Text('获取'),
                 ),

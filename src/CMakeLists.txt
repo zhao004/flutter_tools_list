@@ -19,6 +19,11 @@ set_target_properties(flutter_tools_list PROPERTIES
 
 target_compile_definitions(flutter_tools_list PUBLIC DART_SHARED_LIB)
 
+# Link required Windows libraries for network and process APIs
+if(WIN32)
+  target_link_libraries(flutter_tools_list PRIVATE iphlpapi ws2_32)
+endif()
+
 if (ANDROID)
   # Support Android 15 16k page size
   target_link_options(flutter_tools_list PRIVATE "-Wl,-z,max-page-size=16384")
