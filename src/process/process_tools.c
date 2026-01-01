@@ -55,7 +55,9 @@ FFI_PLUGIN_EXPORT int get_pid_by_name(const char *process_name)
 }
 
 // Helper function to check TCP table for port
-static int check_tcp_port(int port, DWORD *out_pid)
+// check_listen_only: if 1, only check LISTEN state (for port availability)
+//                    if 0, check all states (for finding PID by port)
+static int check_tcp_port(int port, DWORD *out_pid, int check_listen_only)
 {
   DWORD dwSize = 0;
   DWORD dwRetVal = 0;
@@ -90,6 +92,16 @@ static int check_tcp_port(int port, DWORD *out_pid)
     int local_port = ntohs((u_short)pTcpTable->table[i].dwLocalPort);
     if (local_port == port)
     {
+      // If checking for port availability, only consider LISTEN state
+      // This prevents false positives from TIME_WAIT, CLOSE_WAIT, etc.
+      if (check_listen_only)
+      {
+        if (pTcpTable->table[i].dwState != MIB_TCP_STATE_LISTEN)
+        {
+          continue; // Skip non-LISTEN states
+        }
+      }
+
       if (out_pid)
       {
         *out_pid = pTcpTable->table[i].dwOwningPid;
@@ -165,7 +177,8 @@ FFI_PLUGIN_EXPORT int get_pid_by_port(int port)
   DWORD pid = 0;
 
   // Check TCP ports first (more common)
-  if (check_tcp_port(port, &pid))
+  // Use 0 for check_listen_only to check all TCP states
+  if (check_tcp_port(port, &pid, 0))
   {
     return (int)pid;
   }
@@ -181,6 +194,7 @@ FFI_PLUGIN_EXPORT int get_pid_by_port(int port)
 
 // Check if port is in use, returns 1 if in use, 0 if not
 // Optimized to avoid unnecessary PID retrieval
+// Only checks LISTEN state to avoid false positives from TIME_WAIT, CLOSE_WAIT, etc.
 FFI_PLUGIN_EXPORT int is_port_in_use(int port)
 {
   // Input validation
@@ -190,7 +204,8 @@ FFI_PLUGIN_EXPORT int is_port_in_use(int port)
   }
 
   // Check TCP and UDP without retrieving PID (faster)
-  return check_tcp_port(port, NULL) || check_udp_port(port, NULL);
+  // Use 1 for check_listen_only to only check LISTEN state
+  return check_tcp_port(port, NULL, 1) || check_udp_port(port, NULL);
 }
 
 // Get process path by PID, returns path if successful, empty string if failed
